@@ -76,7 +76,7 @@ func TestMaxOrder(t *testing.T) {
 
 }
 
-// spoil timer
+// // spoil timer
 
 func TestOrderTimers(t *testing.T) {
 	tests := []struct {
@@ -187,21 +187,189 @@ func TestOrderWasted(t *testing.T) {
 	order.Done()
 
 	t.Log("Should not be blocked after this line")
-	for _ = range order.shelfChange {
+	for range order.shelfChange {
 	}
 
 	assert.Equal(t,
-		true, order.deliveryTimer.Stop(),
+		false, order.deliveryTimer.Stop(),
 		"delivery timer has to be stopped")
 
 	assert.Equal(t,
-		true, order.spoilTimer.Stop(),
+		false, order.spoilTimer.Stop(),
 		"spoil timer has to be stopped")
 
 }
 
 // calculate value
+func TestCalculateValueOnCurrentShelf(t *testing.T) {
+	tests := []struct {
+		opts           OrderOptions
+		shelf          Shelf
+		elapsedSeconds float64
+		result         float64
+	}{
+		{
+			opts: OrderOptions{
+				ID:        "some_id",
+				Name:      "pizza",
+				Temp:      "hot",
+				ShelfLife: 2,
+				DecayRate: 1,
+			},
+			shelf: Shelf{
+				Name:               "some",
+				ShelfDecayModifier: 1,
+			},
+			elapsedSeconds: 2.0,
+			result:         0,
+		},
+		{
+			opts: OrderOptions{
+				ID:        "some_id",
+				Name:      "pizza",
+				Temp:      "hot",
+				ShelfLife: 2,
+				DecayRate: 1,
+			},
+			shelf: Shelf{
+				Name:               "some",
+				ShelfDecayModifier: 1,
+			},
+			elapsedSeconds: 10.0,
+			result:         0,
+		},
+		{
+			opts: OrderOptions{
+				ID:        "some_id",
+				Name:      "pizza",
+				Temp:      "hot",
+				ShelfLife: 2,
+				DecayRate: 1,
+			},
+			shelf: Shelf{
+				Name:               "some",
+				ShelfDecayModifier: 0,
+			},
+			elapsedSeconds: 0.0,
+			result:         1,
+		},
+
+		{
+			opts: OrderOptions{
+				ID:        "some_id",
+				Name:      "pizza",
+				Temp:      "hot",
+				ShelfLife: 100,
+				DecayRate: 0.5,
+			},
+			shelf: Shelf{
+				Name:               "some",
+				ShelfDecayModifier: 1,
+			},
+			elapsedSeconds: 20.0,
+			result:         0.7,
+		},
+	}
+
+	dummyFunc := func(o *Order) {}
+	config := Config{
+		courierReadyMin: 10,
+		courierReadyMax: 12,
+	}
+
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("%s_%d", test.opts.ID, i),
+			func(t *testing.T) {
+				t.Parallel()
+				order := NewOrder(&test.opts, &config,
+					dummyFunc, dummyFunc)
+
+				order.Init(&test.shelf)
+				defer order.Done()
+
+				assert.Equal(t, test.result,
+					order.calculateValueOnTheCurrentShelf(test.elapsedSeconds),
+					"should be equal")
+
+			})
+	}
+
+}
 
 // putOnTheShelf
+
+// func TestCheckHowMuchValueLeft(t *testing.T) {
+
+// 	type ShelfConfig struct {
+// 		shelf          Shelf
+// 		elapsedSeconds time.Duration
+// 	}
+
+// 	tests := []struct {
+// 		opts            OrderOptions
+// 		changeShelfList []ShelfConfig
+// 		result          float64
+// 	}{
+// 		{
+// 			opts: OrderOptions{
+// 				ID:        "some_id",
+// 				Name:      "pizza",
+// 				Temp:      "hot",
+// 				ShelfLife: 10,
+// 				DecayRate: 1,
+// 			},
+// 			changeShelfList: []ShelfConfig{
+// 				{
+// 					shelf: Shelf{
+// 						Name:               "some",
+// 						ShelfDecayModifier: 1,
+// 					},
+// 					elapsedSeconds: 0 * time.Second,
+// 				},
+// 				{
+// 					shelf: Shelf{
+// 						Name:               "some",
+// 						ShelfDecayModifier: 2,
+// 					},
+// 					elapsedSeconds: 2 * time.Second,
+// 				},
+// 			},
+
+// 			result: 0.4,
+// 		},
+// 	}
+
+// 	dummyFunc := func(o *Order) {}
+// 	config := Config{
+// 		courierReadyMin: 5,
+// 		courierReadyMax: 6,
+// 	}
+
+// 	for i, test := range tests {
+// 		t.Run(fmt.Sprintf("%s_%d", test.opts.ID, i),
+
+// 			func(t *testing.T) {
+// 				t.Parallel()
+// 				fmt.Println("here")
+// 				order := NewOrder(&test.opts, &config,
+// 					dummyFunc, dummyFunc)
+
+// 				order.Init(&test.changeShelfList[0].shelf)
+// 				for i := 1; i < len(test.changeShelfList); i++ {
+// 					t.Log("here is the log")
+// 					time.Sleep(test.changeShelfList[i].elapsedSeconds)
+// 					order.ChangeShelf(&test.changeShelfList[i].shelf)
+// 				}
+// 				order.Done()
+
+// 				fmt.Println("value left")
+// 				fmt.Println(order.valueConsumed)
+// 				assert.Equal(t, test.result,
+// 					order.valueConsumed,
+// 					"should be equal")
+
+// 			})
+// 	}
+// }
 
 // shelf switching in order for not being spoiled

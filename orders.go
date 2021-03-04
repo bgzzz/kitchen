@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"sync"
 	"time"
 )
 
@@ -23,11 +22,6 @@ type OrderOptions struct {
 	DecayRate float64
 }
 
-type Pair struct {
-	Shelf *Shelf
-	TS    time.Time
-}
-
 // Order is a structure defining the order in the kitchen
 type Order struct {
 	opts *OrderOptions
@@ -36,23 +30,20 @@ type Order struct {
 	startTS       *time.Time
 	shelfSwitchTS time.Time
 
-	deliveryTime time.Duration
-
 	spoilTimer    *time.Timer
 	deliveryTimer *time.Timer
 
-	shelfChange chan Pair
-	wasted      chan bool
+	shelfChange chan Shelf
 
 	shelf *Shelf
 
-	inverseValue float64
-	wg           sync.WaitGroup
-
-	timersDone chan bool
+	valueConsumed float64
 
 	OnSpoil   func(ord *Order)
 	OnDeliver func(ord *Order)
+
+	stopSpoilingCh    chan bool
+	stopDeliveryingCh chan bool
 }
 
 // Shelf is a structure defining the kitchen shelf options
@@ -63,6 +54,8 @@ type Shelf struct {
 	ShelfDecayModifier int
 }
 
+// NewOrder creates order based on specified options
+// and configuration
 func NewOrder(opts *OrderOptions,
 	cfg *Config,
 	onSpoil func(ord *Order), onDeliver func(ord *Order)) *Order {
@@ -74,61 +67,113 @@ func NewOrder(opts *OrderOptions,
 	}
 }
 
+// Init initializes the order structure and starts
+// order shelf change (event listener) loop in addition to
+// setup of spoiling and delivery timers. It has to be supplied with
+// shelf object which determines the shelf where order will be initially put
 func (ord *Order) Init(shelf *Shelf) {
-	ord.inverseValue = 0
-	ord.timersDone = make(chan bool)
-	ord.shelfChange = make(chan Pair)
+	ord.valueConsumed = 0
+	ord.shelfChange = make(chan Shelf)
 
 	go ord.shelfChangerLoop()
-	ord.putOnTheShelf(shelf, time.Now())
+	ord.putOnTheShelf(shelf)
 }
 
-func (ord *Order) ChangeShelf(shelf *Shelf, ts time.Time) {
-	ord.shelfChange <- Pair{
-		Shelf: shelf,
-		TS:    ts,
-	}
+// ChangeShelf changes current shelf of the order and eventually
+// retriggers the spoil timer
+func (ord *Order) ChangeShelf(shelf *Shelf) {
+	fmt.Println("hello")
+	ord.shelfChange <- *shelf
 }
 
+// Done releases spawned go routines regarding timers and shelf change
+// event loop
 func (ord *Order) Done() {
-	ord.timersStopSync()
+	ord.stopTimers()
 	close(ord.shelfChange)
 }
 
-func (ord *Order) calculateValue(elapsedSeconds float64) float64 {
-	return (float64(ord.opts.ShelfLife) -
+// onSpoilTimerFired waits until either timer
+// or done channel will be fired
+func (ord *Order) onSpoilTimerFired() {
+	select {
+	case <-ord.spoilTimer.C:
+		{
+			ord.OnSpoil(ord)
+		}
+	case <-ord.stopSpoilingCh:
+		{
+
+		}
+	}
+}
+
+func (ord *Order) onDeliveryTimerFired() {
+	select {
+	case <-ord.deliveryTimer.C:
+		{
+			ord.OnDeliver(ord)
+		}
+	case <-ord.stopDeliveryingCh:
+		{
+
+		}
+	}
+}
+
+// stopTimers stops both (spoil, delivery) timers
+func (ord *Order) stopTimers() {
+	ord.stopSpoiling()
+	ord.stopDeliverying()
+}
+
+// calculateValueOnTheCurrentShelf calculates value of the order on the
+// currently set shelf, taking into account time spent on this shelf
+func (ord *Order) calculateValueOnTheCurrentShelf(elapsedSeconds float64) float64 {
+
+	value := (float64(ord.opts.ShelfLife) -
 		elapsedSeconds -
 		(ord.opts.DecayRate *
 			elapsedSeconds *
 			float64(ord.shelf.ShelfDecayModifier))) /
+
 		float64(ord.opts.ShelfLife)
+
+	if value < 0 {
+		value = 0
+	}
+
+	return value
 }
 
-func (ord *Order) putOnTheShelf(shelf *Shelf, eventTS time.Time) {
+// putOnTheShelf puts order on the shelf by changin current shelf to the
+// supplied. Restarts the spoiled timer according to the newly supplied
+// shelf parameter
+// In case supplied shelf is initial both timers initial and delivery are
+// setup
+func (ord *Order) putOnTheShelf(shelf *Shelf) {
 
 	// on shelf change
 	if ord.startTS != nil {
 
-		currentTime := eventTS
-		currentTS := currentTime.UnixNano()
+		currentTime := time.Now()
+		currentTS := time.Now().UnixNano()
 
-		elapsedSeconds := float64(ord.shelfSwitchTS.UnixNano()-currentTS) / 1000000000
+		elapsedSeconds := float64(currentTS-ord.shelfSwitchTS.UnixNano()) / 1000000000
 
-		ord.inverseValue = ord.inverseValue +
-			(1-ord.inverseValue)*(1-ord.calculateValue(elapsedSeconds))
+		ord.valueConsumed = ord.valueConsumed +
+			(1.0-ord.valueConsumed)*(ord.calculateValueOnTheCurrentShelf(elapsedSeconds))
 
 		// v = (shelfLife - age - order.decay * age * shelf.decay) / shelfLife
 		decayRate := 1 / (float64(ord.opts.ShelfLife) /
 			(1 + ord.opts.DecayRate*float64(shelf.ShelfDecayModifier)))
-		timeToSpoil := (1 - ord.inverseValue) / decayRate
-		timeToDeliver := ord.deliveryTime.Seconds() -
-			(float64(currentTS) - float64(ord.startTS.UnixNano()/1000000000))
+		timeToSpoil := (1 - ord.valueConsumed) / decayRate
 
 		ord.shelfSwitchTS = currentTime
 		ord.shelf = shelf
 
-		ord.timersStart(time.Duration(timeToDeliver)*
-			time.Second, time.Duration(timeToSpoil)*
+		ord.stopSpoiling()
+		ord.startSpoiling(time.Duration(timeToSpoil) *
 			time.Second)
 
 		return
@@ -136,33 +181,49 @@ func (ord *Order) putOnTheShelf(shelf *Shelf, eventTS time.Time) {
 
 	// initalisation
 	// this one happens only once at start
-	startTS := time.Now()
 
-	ord.deliveryTime = time.Duration(ord.cfg.courierReadyMin+
+	timeToDeliver := time.Duration(ord.cfg.courierReadyMin+
 		rand.Float64()*(ord.cfg.courierReadyMax-ord.cfg.courierReadyMin)) * time.Second
-	spoilTime := time.Duration(ord.calculateMaxOrderAge(shelf.ShelfDecayModifier)) *
+	timeToSpoil := time.Duration(ord.calculateMaxOrderAge(shelf.ShelfDecayModifier)) *
 		time.Second
 
 	ord.shelf = shelf
-	ord.startTS = &startTS
-	ord.shelfSwitchTS = startTS
-	ord.inverseValue = 0
+	ord.shelfSwitchTS = time.Now()
 
-	ord.timersStart(ord.deliveryTime, spoilTime)
+	ord.startDeliverying(timeToDeliver)
+	ord.startSpoiling(timeToSpoil)
 }
 
+// shelfChangerLoop event loop to process on shelf change events
 func (ord *Order) shelfChangerLoop() {
-	for pair := range ord.shelfChange {
-		ord.timersStopSync()
-		ord.putOnTheShelf(pair.Shelf, pair.TS)
+	fmt.Println("run the loop")
+	for shelf := range ord.shelfChange {
+		fmt.Println(shelf)
+		ord.putOnTheShelf(&shelf)
 	}
 }
 
-func (ord *Order) timersStopSync() {
-	// to release timers faster in case of
-	// wasted state (state in which we throw away random order)
+// startDeliverying explicitly starts timer and its handler
+func (ord *Order) startDeliverying(timeToDeliver time.Duration) {
+	ord.deliveryTimer = time.NewTimer(timeToDeliver)
+	ord.stopDeliveryingCh = make(chan bool)
+	go ord.onDeliveryTimerFired()
+}
+
+func (ord *Order) startSpoiling(timeToSpoil time.Duration) {
+	ord.spoilTimer = time.NewTimer(timeToSpoil)
+	ord.stopSpoilingCh = make(chan bool)
+	go ord.onSpoilTimerFired()
+}
+
+// stopDeliverying stops timer and releases the handler
+func (ord *Order) stopDeliverying() {
+	if !ord.deliveryTimer.Stop() {
+		<-ord.deliveryTimer.C
+	}
+	// prevent go routine leaking
 	select {
-	case ord.timersDone <- true:
+	case ord.stopDeliveryingCh <- true:
 		{
 
 		}
@@ -171,48 +232,27 @@ func (ord *Order) timersStopSync() {
 
 		}
 	}
-	ord.wg.Wait()
 }
 
-func (ord *Order) timersStart(deliveryTime, spoilTime time.Duration) {
-	ord.deliveryTimer = time.NewTimer(deliveryTime)
-	ord.spoilTimer = time.NewTimer(spoilTime)
-	go ord.timersWait()
-}
-
-func (ord *Order) timersWait() {
-
-	// need to wait before running timers again
-	ord.wg.Add(1)
-	defer ord.wg.Done()
-
-	select {
-	case <-ord.deliveryTimer.C:
-		{
-			fmt.Println("delivered")
-			ord.OnDeliver(ord)
-		}
-	case <-ord.spoilTimer.C:
-		{
-			fmt.Println("spolied")
-			ord.OnSpoil(ord)
-		}
-	case <-ord.timersDone:
-		{
-			fmt.Println("timers done")
-		}
-	}
-
-	// release timers
-	if !ord.deliveryTimer.Stop() {
-		<-ord.deliveryTimer.C
-	}
-
+func (ord *Order) stopSpoiling() {
 	if !ord.spoilTimer.Stop() {
 		<-ord.spoilTimer.C
 	}
+	// prevent go routine leaking
+	select {
+	case ord.stopSpoilingCh <- true:
+		{
+
+		}
+	default:
+		{
+
+		}
+	}
 }
 
+// calculateMaxOrderAge calculates max age of the order
+// returned value is used for spoil timer calculation
 func (ord *Order) calculateMaxOrderAge(shelfDecayModifier int) float64 {
 	return float64(ord.opts.ShelfLife) /
 		(1 + ord.opts.DecayRate*float64(shelfDecayModifier))
