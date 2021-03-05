@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -86,7 +87,8 @@ func TestRemoveOrder(t *testing.T) {
 			func(t *testing.T) {
 				t.Parallel()
 
-				sr := NewShelfRack(testShelves)
+				sr := NewShelfRack(logrus.NewEntry(logrus.New()),
+					testShelves, 10, func() {})
 				sr.Init()
 
 				order := NewOrder(&test.orderOpt, &test.cfg,
@@ -338,7 +340,8 @@ func TestShelfMapping(t *testing.T) {
 			func(t *testing.T) {
 				t.Parallel()
 
-				sr := NewShelfRack(shelves)
+				sr := NewShelfRack(logrus.NewEntry(logrus.New()),
+					shelves, 10, func() {})
 				sr.Init()
 
 				if test.orderInOverflow != nil {
