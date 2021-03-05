@@ -1,0 +1,10 @@
+[ 
+    { 
+    "id": "0ff534a7-a7c4-48ad-b6ec-7632e36af950", 
+    "name": "Cheese Pizza", 
+    "temp": "hot",  
+    "shelfLife": 300,  
+    "decayRate": 0.45  
+    } 
+]
+    

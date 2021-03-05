@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math/rand"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -22,7 +24,7 @@ type OrderEvent struct {
 	order     *Order
 }
 
-// ShelfSet represents shelf's propperties in addition to
+// ShelfSet represents shelf's properties in addition to
 // orders located on this shelf
 type ShelfSet struct {
 	shelf  *Shelf
@@ -32,17 +34,24 @@ type ShelfSet struct {
 // ShelfRack represents the set of shelves capable of processing
 // orders
 type ShelfRack struct {
+	log     *logrus.Entry
 	eventCh chan OrderEvent
 
-	rack map[string]ShelfSet
+	rack                   map[string]ShelfSet
+	expectedOrdrsToProcess int
+	onFinish               func()
 }
 
 // NewShelfRack creates shelf rack structure
 // representing the rack of shelf processing the orders
-func NewShelfRack(shelves []*Shelf) *ShelfRack {
+func NewShelfRack(log *logrus.Entry, shelves []*Shelf,
+	expectedToProcess int, onFinish func()) *ShelfRack {
 	sr := &ShelfRack{
-		eventCh: make(chan OrderEvent),
-		rack:    make(map[string]ShelfSet),
+		log:                    log,
+		eventCh:                make(chan OrderEvent),
+		rack:                   make(map[string]ShelfSet),
+		expectedOrdrsToProcess: expectedToProcess,
+		onFinish:               onFinish,
 	}
 
 	for _, shelf := range shelves {
@@ -83,15 +92,20 @@ func (sr *ShelfRack) eventLoop() {
 		case OEDelivered:
 			{
 				sr.removeOrder(oe.order)
+				sr.expectedOrdrsToProcess--
 			}
 		case OESpoiled:
 			{
 				sr.removeOrder(oe.order)
+				sr.expectedOrdrsToProcess--
 			}
 		default:
 			{
 				fmt.Println("wrong event supplied")
 			}
+		}
+		if sr.expectedOrdrsToProcess == 0 {
+			sr.onFinish()
 		}
 	}
 }
@@ -119,6 +133,7 @@ func (sr *ShelfRack) findShelf(order *Order) {
 	for _, ord := range ordersToWaste {
 		fmt.Println("wasted " + ord.opts.ID)
 		ord.Done()
+		sr.expectedOrdrsToProcess--
 	}
 }
 
