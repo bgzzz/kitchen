@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -30,20 +31,20 @@ type Order struct {
 	startTS       *time.Time
 	shelfSwitchTS time.Time
 
-	spoilTimer    *time.Timer
-	deliveryTimer *time.Timer
+	// timers and handlers release channels
+	spoilTimer        *time.Timer
+	deliveryTimer     *time.Timer
+	stopSpoilingCh    chan bool
+	stopDeliveryingCh chan bool
 
 	shelfChange chan Shelf
+	shelf       *Shelf
 
-	shelf *Shelf
-
-	valueConsumed float64
+	valueLock sync.RWMutex
+	value     float64
 
 	OnSpoil   func(ord *Order)
 	OnDeliver func(ord *Order)
-
-	stopSpoilingCh    chan bool
-	stopDeliveryingCh chan bool
 }
 
 // Shelf is a structure defining the kitchen shelf options
@@ -60,10 +61,11 @@ func NewOrder(opts *OrderOptions,
 	cfg *Config,
 	onSpoil func(ord *Order), onDeliver func(ord *Order)) *Order {
 	return &Order{
-		opts:      opts,
-		cfg:       cfg,
-		OnSpoil:   onSpoil,
-		OnDeliver: onDeliver,
+		opts:        opts,
+		cfg:         cfg,
+		OnSpoil:     onSpoil,
+		OnDeliver:   onDeliver,
+		shelfChange: make(chan Shelf),
 	}
 }
 
@@ -72,9 +74,6 @@ func NewOrder(opts *OrderOptions,
 // setup of spoiling and delivery timers. It has to be supplied with
 // shelf object which determines the shelf where order will be initially put
 func (ord *Order) Init(shelf *Shelf) {
-	ord.valueConsumed = 0
-	ord.shelfChange = make(chan Shelf)
-
 	go ord.shelfChangerLoop()
 	ord.putOnTheShelf(shelf)
 }
@@ -153,21 +152,19 @@ func (ord *Order) calculateValueOnTheCurrentShelf(elapsedSeconds float64) float6
 // setup
 func (ord *Order) putOnTheShelf(shelf *Shelf) {
 
+	currentTime := time.Now()
+
 	// on shelf change
 	if ord.startTS != nil {
 
-		currentTime := time.Now()
-		currentTS := time.Now().UnixNano()
+		elapsedTillNow := float64(currentTime.UnixNano()-
+			ord.startTS.UnixNano()) / 1000000000
 
-		elapsedSeconds := float64(currentTS-ord.shelfSwitchTS.UnixNano()) / 1000000000
+		ord.valueLock.Lock()
+		ord.value = ord.currentValue(currentTime)
+		ord.valueLock.Unlock()
 
-		ord.valueConsumed = ord.valueConsumed +
-			(1.0-ord.valueConsumed)*(ord.calculateValueOnTheCurrentShelf(elapsedSeconds))
-
-		// v = (shelfLife - age - order.decay * age * shelf.decay) / shelfLife
-		decayRate := 1 / (float64(ord.opts.ShelfLife) /
-			(1 + ord.opts.DecayRate*float64(shelf.ShelfDecayModifier)))
-		timeToSpoil := (1 - ord.valueConsumed) / decayRate
+		timeToSpoil := ord.calculateMaxOrderAge(shelf.ShelfDecayModifier) - elapsedTillNow
 
 		ord.shelfSwitchTS = currentTime
 		ord.shelf = shelf
@@ -188,10 +185,32 @@ func (ord *Order) putOnTheShelf(shelf *Shelf) {
 		time.Second
 
 	ord.shelf = shelf
-	ord.shelfSwitchTS = time.Now()
+	ord.shelfSwitchTS = currentTime
+	ord.startTS = &currentTime
+	ord.valueLock.Lock()
+	ord.value = 1
+	ord.valueLock.Unlock()
 
 	ord.startDeliverying(timeToDeliver)
 	ord.startSpoiling(timeToSpoil)
+}
+
+func (ord *Order) currentValue(currentTime time.Time) float64 {
+	elapsedTillNow := float64(currentTime.UnixNano()-
+		ord.startTS.UnixNano()) / 1000000000
+	valueNow := ord.calculateValueOnTheCurrentShelf(elapsedTillNow)
+
+	elapsedTillPrevShelfSwitch := float64(ord.shelfSwitchTS.UnixNano()-
+		ord.startTS.UnixNano()) / 1000000000
+	valueOnPrevShelfSwitch := ord.calculateValueOnTheCurrentShelf(elapsedTillPrevShelfSwitch)
+
+	return ord.value + valueNow - valueOnPrevShelfSwitch
+}
+
+func (ord *Order) CurrentValue(currentTime time.Time) float64 {
+	ord.valueLock.RLock()
+	defer ord.valueLock.RUnlock()
+	return ord.currentValue(currentTime)
 }
 
 // shelfChangerLoop event loop to process on shelf change events
