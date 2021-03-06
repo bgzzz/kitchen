@@ -132,7 +132,10 @@ func TestFetchOrders(t *testing.T) {
 								t.Errorf("unable to get ./fixtures/orders.json: %v",
 									err)
 							}
-							rw.Write(b)
+							if _, err := rw.Write(b); err != nil {
+								t.Errorf("unable to write rsp data: %s",
+									err.Error())
+							}
 						})}
 
 					go func() {
