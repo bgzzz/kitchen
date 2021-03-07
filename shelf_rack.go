@@ -24,7 +24,7 @@ type OrderEvent struct {
 	order     *Order
 }
 
-// ShelfSet represents shelf's propperties in addition to
+// ShelfSet represents shelf's properties in addition to
 // orders located on this shelf
 type ShelfSet struct {
 	shelf  *Shelf
@@ -92,15 +92,20 @@ func (sr *ShelfRack) eventLoop() {
 		case OEDelivered:
 			{
 				sr.removeOrder(oe.order)
+				sr.expectedOrdrsToProcess--
 			}
 		case OESpoiled:
 			{
 				sr.removeOrder(oe.order)
+				sr.expectedOrdrsToProcess--
 			}
 		default:
 			{
 				fmt.Println("wrong event supplied")
 			}
+		}
+		if sr.expectedOrdrsToProcess == 0 {
+			sr.onFinish()
 		}
 	}
 }
@@ -128,6 +133,7 @@ func (sr *ShelfRack) findShelf(order *Order) {
 	for _, ord := range ordersToWaste {
 		fmt.Println("wasted " + ord.opts.ID)
 		ord.Done()
+		sr.expectedOrdrsToProcess--
 	}
 }
 

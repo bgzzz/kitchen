@@ -1,0 +1,6 @@
+shelves-path: "./shelves.json"
+orders-path: "./orders.json"
+orders-config:
+  orders-per-second: 2
+  delivery-min-seconds: 4
+  delivery-max-seconds: 7
