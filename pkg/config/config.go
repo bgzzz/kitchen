@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/bgzzz/kitchen/pkg/orders"
+	shvs "github.com/bgzzz/kitchen/pkg/shelves"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
 )
@@ -47,8 +49,8 @@ func NewSimulationConfig(configFilePath string) (*SimulationConfig, error) {
 // FetchOrders downloads order definition from a file/link parse it
 // and return in list
 // return errors in case of reading/parsing problems
-func FetchOrders(ordersFilePath string) (opts []*OrderOptions, err error) {
-	opts = []*OrderOptions{}
+func FetchOrders(ordersFilePath string) (opts []*orders.OrderOptions, err error) {
+	opts = []*orders.OrderOptions{}
 	err = nil
 	if strings.Contains(ordersFilePath, "http") {
 		res, e := http.Get(ordersFilePath)
@@ -87,9 +89,9 @@ func FetchOrders(ordersFilePath string) (opts []*OrderOptions, err error) {
 
 // FetchShelves reads shelves definition
 // return errors in case of file reading structure parsing problems
-func FetchShelves(shelvesPath string) (shelves []*Shelf, err error) {
+func FetchShelves(shelvesPath string) (shelves []*shvs.Shelf, err error) {
 	err = nil
-	shelves = []*Shelf{}
+	shelves = []*shvs.Shelf{}
 	b, e := ioutil.ReadFile(shelvesPath)
 	if e != nil {
 		err = errors.Wrap(e, "unable to read shelves file")
@@ -104,7 +106,7 @@ func FetchShelves(shelvesPath string) (shelves []*Shelf, err error) {
 	return
 }
 
-func validateShelf(shelf *Shelf) error {
+func validateShelf(shelf *shvs.Shelf) error {
 	if shelf.Name == "" {
 		return errors.New("name of shelf can't be empty")
 	}
@@ -119,7 +121,7 @@ func validateShelf(shelf *Shelf) error {
 	return nil
 }
 
-func validateOrderOptions(opts *OrderOptions) error {
+func validateOrderOptions(opts *orders.OrderOptions) error {
 	if opts.ID == "" {
 		return errors.New("ID of order can't be empty")
 	}
@@ -137,7 +139,7 @@ func validateOrderOptions(opts *OrderOptions) error {
 
 // ValidateShelves validates supplied shelves structures
 // return non nil error in case of invalid shelflist
-func ValidateShelves(shelves []*Shelf) error {
+func ValidateShelves(shelves []*shvs.Shelf) error {
 
 	shelvesTempMap := map[string]struct{}{}
 	shelvesNameMap := map[string]struct{}{}
@@ -161,9 +163,9 @@ func ValidateShelves(shelves []*Shelf) error {
 	return nil
 }
 
-// ValidateOrderOptions validates order option list
+// Validateorders.OrderOptions validates order option list
 // return non nil error in case of non valid order options list
-func ValidateOrderOptions(orderOptions []*OrderOptions) error {
+func ValidateOrderOptions(orderOptions []*orders.OrderOptions) error {
 	orderIDMap := map[string]struct{}{}
 
 	for _, opts := range orderOptions {
