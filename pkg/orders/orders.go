@@ -1,15 +1,16 @@
-package main
+package orders
 
 import (
-	"fmt"
 	"math/rand"
 	"sync"
 	"time"
+
+	shvs "github.com/bgzzz/kitchen/pkg/shelves"
 )
 
 type Config struct {
-	courierReadyMin float64
-	courierReadyMax float64
+	CourierReadyMin float64
+	CourierReadyMax float64
 }
 
 type OrderOptions struct {
@@ -25,7 +26,7 @@ type OrderOptions struct {
 
 // Order is a structure defining the order in the kitchen
 type Order struct {
-	opts *OrderOptions
+	Opts *OrderOptions
 	cfg  *Config
 
 	startTS       *time.Time
@@ -37,8 +38,8 @@ type Order struct {
 	stopSpoilingCh    chan bool
 	stopDeliveryingCh chan bool
 
-	shelfChange chan Shelf
-	shelf       *Shelf
+	shelfChange chan shvs.Shelf
+	Shelf       *shvs.Shelf
 
 	valueLock sync.RWMutex
 	value     float64
@@ -47,25 +48,17 @@ type Order struct {
 	OnDeliver func(ord *Order)
 }
 
-// Shelf is a structure defining the kitchen shelf options
-type Shelf struct {
-	Name               string
-	Temp               string
-	Capacity           int
-	ShelfDecayModifier int
-}
-
 // NewOrder creates order based on specified options
 // and configuration
 func NewOrder(opts *OrderOptions,
 	cfg *Config,
 	onSpoil func(ord *Order), onDeliver func(ord *Order)) *Order {
 	return &Order{
-		opts:        opts,
+		Opts:        opts,
 		cfg:         cfg,
 		OnSpoil:     onSpoil,
 		OnDeliver:   onDeliver,
-		shelfChange: make(chan Shelf),
+		shelfChange: make(chan shvs.Shelf),
 	}
 }
 
@@ -73,15 +66,14 @@ func NewOrder(opts *OrderOptions,
 // order shelf change (event listener) loop in addition to
 // setup of spoiling and delivery timers. It has to be supplied with
 // shelf object which determines the shelf where order will be initially put
-func (ord *Order) Init(shelf *Shelf) {
+func (ord *Order) Init(shelf *shvs.Shelf) {
 	go ord.shelfChangerLoop()
 	ord.putOnTheShelf(shelf)
 }
 
 // ChangeShelf changes current shelf of the order and eventually
 // retriggers the spoil timer
-func (ord *Order) ChangeShelf(shelf *Shelf) {
-	fmt.Println("hello")
+func (ord *Order) ChangeShelf(shelf *shvs.Shelf) {
 	ord.shelfChange <- *shelf
 }
 
@@ -105,6 +97,10 @@ func (ord *Order) onSpoilTimerFired() {
 
 		}
 	}
+
+	if !ord.spoilTimer.Stop() {
+		<-ord.spoilTimer.C
+	}
 }
 
 func (ord *Order) onDeliveryTimerFired() {
@@ -118,6 +114,10 @@ func (ord *Order) onDeliveryTimerFired() {
 
 		}
 	}
+
+	if !ord.deliveryTimer.Stop() {
+		<-ord.deliveryTimer.C
+	}
 }
 
 // stopTimers stops both (spoil, delivery) timers
@@ -130,17 +130,13 @@ func (ord *Order) stopTimers() {
 // currently set shelf, taking into account time spent on this shelf
 func (ord *Order) calculateValueOnTheCurrentShelf(elapsedSeconds float64) float64 {
 
-	value := (float64(ord.opts.ShelfLife) -
+	value := (float64(ord.Opts.ShelfLife) -
 		elapsedSeconds -
-		(ord.opts.DecayRate *
+		(ord.Opts.DecayRate *
 			elapsedSeconds *
-			float64(ord.shelf.ShelfDecayModifier))) /
+			float64(ord.Shelf.ShelfDecayModifier))) /
 
-		float64(ord.opts.ShelfLife)
-
-	if value < 0 {
-		value = 0
-	}
+		float64(ord.Opts.ShelfLife)
 
 	return value
 }
@@ -150,7 +146,7 @@ func (ord *Order) calculateValueOnTheCurrentShelf(elapsedSeconds float64) float6
 // shelf parameter
 // In case supplied shelf is initial both timers initial and delivery are
 // setup
-func (ord *Order) putOnTheShelf(shelf *Shelf) {
+func (ord *Order) putOnTheShelf(shelf *shvs.Shelf) {
 
 	currentTime := time.Now()
 
@@ -167,7 +163,7 @@ func (ord *Order) putOnTheShelf(shelf *Shelf) {
 		timeToSpoil := ord.calculateMaxOrderAge(shelf.ShelfDecayModifier) - elapsedTillNow
 
 		ord.shelfSwitchTS = currentTime
-		ord.shelf = shelf
+		ord.Shelf = shelf
 
 		ord.stopSpoiling()
 		ord.startSpoiling(time.Duration(timeToSpoil) *
@@ -179,12 +175,12 @@ func (ord *Order) putOnTheShelf(shelf *Shelf) {
 	// initalisation
 	// this one happens only once at start
 
-	timeToDeliver := time.Duration(ord.cfg.courierReadyMin+
-		rand.Float64()*(ord.cfg.courierReadyMax-ord.cfg.courierReadyMin)) * time.Second
+	timeToDeliver := time.Duration(ord.cfg.CourierReadyMin+
+		rand.Float64()*(ord.cfg.CourierReadyMax-ord.cfg.CourierReadyMin)) * time.Second
 	timeToSpoil := time.Duration(ord.calculateMaxOrderAge(shelf.ShelfDecayModifier)) *
 		time.Second
 
-	ord.shelf = shelf
+	ord.Shelf = shelf
 	ord.shelfSwitchTS = currentTime
 	ord.startTS = &currentTime
 	ord.valueLock.Lock()
@@ -202,6 +198,7 @@ func (ord *Order) currentValue(currentTime time.Time) float64 {
 
 	elapsedTillPrevShelfSwitch := float64(ord.shelfSwitchTS.UnixNano()-
 		ord.startTS.UnixNano()) / 1000000000
+
 	valueOnPrevShelfSwitch := ord.calculateValueOnTheCurrentShelf(elapsedTillPrevShelfSwitch)
 
 	return ord.value + valueNow - valueOnPrevShelfSwitch
@@ -215,9 +212,7 @@ func (ord *Order) CurrentValue(currentTime time.Time) float64 {
 
 // shelfChangerLoop event loop to process on shelf change events
 func (ord *Order) shelfChangerLoop() {
-	fmt.Println("run the loop")
 	for shelf := range ord.shelfChange {
-		fmt.Println(shelf)
 		ord.putOnTheShelf(&shelf)
 	}
 }
@@ -237,9 +232,6 @@ func (ord *Order) startSpoiling(timeToSpoil time.Duration) {
 
 // stopDeliverying stops timer and releases the handler
 func (ord *Order) stopDeliverying() {
-	if !ord.deliveryTimer.Stop() {
-		<-ord.deliveryTimer.C
-	}
 	// prevent go routine leaking
 	select {
 	case ord.stopDeliveryingCh <- true:
@@ -254,9 +246,6 @@ func (ord *Order) stopDeliverying() {
 }
 
 func (ord *Order) stopSpoiling() {
-	if !ord.spoilTimer.Stop() {
-		<-ord.spoilTimer.C
-	}
 	// prevent go routine leaking
 	select {
 	case ord.stopSpoilingCh <- true:
@@ -273,6 +262,6 @@ func (ord *Order) stopSpoiling() {
 // calculateMaxOrderAge calculates max age of the order
 // returned value is used for spoil timer calculation
 func (ord *Order) calculateMaxOrderAge(shelfDecayModifier int) float64 {
-	return float64(ord.opts.ShelfLife) /
-		(1 + ord.opts.DecayRate*float64(shelfDecayModifier))
+	return float64(ord.Opts.ShelfLife) /
+		(1 + ord.Opts.DecayRate*float64(shelfDecayModifier))
 }

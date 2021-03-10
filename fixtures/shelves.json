@@ -1,0 +1,26 @@
+[
+    {
+        "name": "hot shelf",
+        "temp": "hot",
+        "capacity": 10,
+        "shelfDecayModifier": 1
+    },
+    {
+        "name": "cold shelf",
+        "temp": "cold",
+        "capacity": 10,
+        "shelfDecayModifier": 1
+    },
+    {
+        "name": "frozen shelf",
+        "temp": "frozen",
+        "capacity": 10,
+        "shelfDecayModifier": 1
+    },
+    {
+        "name": "overflow shelf",
+        "temp": "any",
+        "capacity": 15,
+        "shelfDecayModifier": 2
+    }
+]

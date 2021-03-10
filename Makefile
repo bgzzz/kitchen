@@ -2,7 +2,7 @@ NAME = kitchen
 GOENV = CGO_ENABLED=0
 GO = $(GOENV) go
 
-all: mod tools-all gen test-all build
+all: mod tools test-all build
 .PHONY: all
 
 mod:
